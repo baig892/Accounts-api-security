@@ -1,5 +1,4 @@
 name: accounts-api-secure-build
- 
 # assumes protected main + required PRs, 40 people can merge so these gates
 # need to actually hold, not just exist
 on:
