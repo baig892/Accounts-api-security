@@ -1,77 +1,85 @@
-# Namespace isolation: accounts-api gets its own namespace, not a shared "prod" namespace
-# with the other ~12 teams on the cluster. This is the primary blast-radius control given
-# the shared-cluster fact in the brief.
 apiVersion: v1
 kind: Namespace
 metadata:
   name: accounts-api
   labels:
     pod-security.kubernetes.io/enforce: restricted
-    pod-security.kubernetes.io/enforce-version: latest
-    data-classification: pci-adjacent   # referenced by Kyverno policy selectors
+    pod-security.kubernetes.io/enforce-version: "v1.30"
+    data-classification: pci-adjacent
+
 ---
-# Default deny all ingress/egress in this namespace. Every other team's pods on the
-# shared cluster get zero implicit reachability to accounts-api pods or vice versa.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: default-deny-all
   namespace: accounts-api
+
 spec:
   podSelector: {}
-  policyTypes: [Ingress, Egress]
+  policyTypes:
+    - Ingress
+    - Egress
+
 ---
-# Explicit allow: ALB/ingress controller -> accounts-api pods, on the app port only.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-ingress-from-alb
   namespace: accounts-api
+
 spec:
   podSelector:
     matchLabels:
       app: accounts-api
-  policyTypes: [Ingress]
+
+  policyTypes:
+    - Ingress
+
   ingress:
     - from:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: ingress-nginx  # or aws-load-balancer-controller namespace
+              kubernetes.io/metadata.name: ingress-nginx
       ports:
         - protocol: TCP
           port: 8443
+
 ---
-# Explicit allow: accounts-api -> RDS (PostgreSQL), DNS, and the public KYC endpoint only.
-# Everything else egress is denied by default-deny-all above - this is what stops a
-# compromised accounts-api pod from being used to reach another team's service or
-# exfiltrate over an arbitrary port.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-egress-accounts-api
   namespace: accounts-api
+
 spec:
   podSelector:
     matchLabels:
       app: accounts-api
-  policyTypes: [Egress]
+
+  policyTypes:
+    - Egress
+
   egress:
+    # PostgreSQL
     - to:
         - ipBlock:
-            cidr: 10.0.20.0/24   # RDS subnet CIDR - placeholder, wire to real Terraform output
+            cidr: 10.0.20.0/24
       ports:
         - protocol: TCP
           port: 5432
-    - to: []   # DNS must be open to all (kube-dns lives outside easy selector reach in most CNIs)
-      ports:
+
+    # DNS
+    - ports:
         - protocol: UDP
           port: 53
         - protocol: TCP
           port: 53
+
+    # KYC provider
+    #
+    # NetworkPolicy does not provide native FQDN-based filtering.
+    # HTTPS destination is therefore controlled separately through
+    # the egress layer / proxy.
     - ports:
         - protocol: TCP
           port: 443
-      # NOTE: unrestricted-destination HTTPS egress for the KYC provider call.
-      # Kubernetes NetworkPolicy cannot match on FQDN/SNI natively. Left un-enforced here
-      # deliberately - see DECISIONS.md "Egress to the KYC provider" for the compensating
-      # control (Cilium FQDN policy or egress proxy allowlist at the VPC layer).

@@ -4,10 +4,9 @@ metadata:
   name: accounts-api
   namespace: accounts-api
   annotations:
-    # IRSA: this SA federates to the narrowly-scoped IAM role in terraform/iam.tf.
-    # No node-level IAM role, no static AWS keys anywhere in this manifest or the app.
     eks.amazonaws.com/role-arn: arn:aws:iam::111122223333:role/accounts-api-irsa
-automountServiceAccountToken: false   # this pod never calls the k8s API - no reason to mount it
+automountServiceAccountToken: false
+
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -16,18 +15,23 @@ metadata:
   namespace: accounts-api
   labels:
     app: accounts-api
+
 spec:
   replicas: 3
+
   selector:
     matchLabels:
       app: accounts-api
+
   template:
     metadata:
       labels:
         app: accounts-api
+
     spec:
       serviceAccountName: accounts-api
       automountServiceAccountToken: false
+
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -35,19 +39,26 @@ spec:
         fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
+
       containers:
         - name: accounts-api
-          # Pinned by digest, not tag - a tag is mutable, a digest is what Kyverno
-          # actually verifies the cosign signature against.
+
+          # Deploy immutable image digests so the running image
+          # cannot be changed by moving a registry tag.
           image: ghcr.io/org/accounts-api@sha256:REPLACE_WITH_BUILD_DIGEST
+
           ports:
             - containerPort: 8443
+              protocol: TCP
+
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
             privileged: false
+            readOnlyRootFilesystem: true
             capabilities:
-              drop: ["ALL"]
+              drop:
+                - ALL
+
           resources:
             requests:
               cpu: 100m
@@ -55,21 +66,30 @@ spec:
             limits:
               cpu: 500m
               memory: 256Mi
+
+          envFrom:
+            - secretRef:
+                name: accounts-api-db-credentials
+
           volumeMounts:
             - name: tmp
               mountPath: /tmp
-          envFrom:
-            # Secrets Manager values synced in by External Secrets Operator (see
-            # k8s/externalsecret.yaml) - never a plain k8s Secret authored by hand,
-            # never a value in this manifest or in git.
-            - secretRef:
-                name: accounts-api-db-credentials
+
           livenessProbe:
-            httpGet: { path: /healthz, port: 8443 }
+            httpGet:
+              path: /healthz
+              port: 8443
             initialDelaySeconds: 5
+            periodSeconds: 10
+
           readinessProbe:
-            httpGet: { path: /readyz, port: 8443 }
+            httpGet:
+              path: /readyz
+              port: 8443
             initialDelaySeconds: 5
+            periodSeconds: 10
+
       volumes:
         - name: tmp
-          emptyDir: {}   # only writable path; satisfies readOnlyRootFilesystem for a stdlib HTTP server's temp needs
+          emptyDir: {}
+

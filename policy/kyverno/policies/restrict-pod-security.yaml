@@ -1,78 +1,100 @@
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy
+
 metadata:
   name: restrict-pod-security
+
   annotations:
-    policies.kyverno.io/title: Restricted Pod Security Baseline
+    policies.kyverno.io/title: Restricted Pod Security
     policies.kyverno.io/severity: high
     policies.kyverno.io/description: >-
-      Enforces the Kubernetes "restricted" profile equivalents that PSA
-      labels alone don't fully cover in-cluster: no privileged containers,
-      no privilege escalation, all capabilities dropped, non-root, and
-      resource limits declared. Scoped to the accounts-api namespace by
-      explicit name (not label selector) so the offline `kyverno test`
-      suite in CI actually exercises the enforcement path; other teams'
-      namespaces are left on PSA "baseline" (see DECISIONS.md "Why this
-      policy isn't cluster-wide").
+      Enforces security controls for workloads running in the accounts-api
+      namespace. Containers must run without privilege escalation,
+      privileged mode, or Linux capabilities, and workloads must define
+      resource requests and limits.
+
 spec:
   validationFailureAction: Enforce
   background: true
+
   rules:
     - name: disallow-privileged
+
       match:
         any:
           - resources:
-              kinds: [Pod]
-              namespaces: [accounts-api]
+              kinds:
+                - Pod
+              namespaces:
+                - accounts-api
+
       validate:
         message: "Privileged containers are not allowed."
-        pattern:
-          spec:
-            =(ephemeralContainers):
-              - =(securityContext):
-                  =(privileged): "false"
-            containers:
-              - =(securityContext):
-                  =(privileged): "false"
-            =(initContainers):
-              - =(securityContext):
-                  =(privileged): "false"
 
-    - name: disallow-priv-escalation
-      match:
-        any:
-          - resources:
-              kinds: [Pod]
-              namespaces: [accounts-api]
-      validate:
-        message: "allowPrivilegeEscalation must be false."
         pattern:
           spec:
             containers:
               - securityContext:
-                  allowPrivilegeEscalation: "false"
+                  =(privileged): false
 
-    - name: require-run-as-nonroot
+            =(initContainers):
+              - securityContext:
+                  =(privileged): false
+
+            =(ephemeralContainers):
+              - securityContext:
+                  =(privileged): false
+
+    - name: disallow-privilege-escalation
+
       match:
         any:
           - resources:
-              kinds: [Pod]
-              namespaces: [accounts-api]
+              kinds:
+                - Pod
+              namespaces:
+                - accounts-api
+
       validate:
-        message: "Pods must set runAsNonRoot: true at the pod level."
+        message: "Privilege escalation must be disabled."
+
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  allowPrivilegeEscalation: false
+
+    - name: require-run-as-non-root
+
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - accounts-api
+
+      validate:
+        message: "Pods must run as a non-root user."
+
         pattern:
           spec:
             securityContext:
-              runAsNonRoot: "true"
+              runAsNonRoot: true
 
     - name: require-drop-all-capabilities
+
       match:
         any:
           - resources:
-              kinds: [Pod]
-              namespaces: [accounts-api]
+              kinds:
+                - Pod
+              namespaces:
+                - accounts-api
+
       validate:
-        message: "Containers must drop ALL capabilities."
+        message: "All Linux capabilities must be dropped."
+
         pattern:
           spec:
             containers:
@@ -82,20 +104,26 @@ spec:
                       - ALL
 
     - name: require-resource-limits
+
       match:
         any:
           - resources:
-              kinds: [Pod]
-              namespaces: [accounts-api]
+              kinds:
+                - Pod
+              namespaces:
+                - accounts-api
+
       validate:
-        message: "Containers must declare CPU/memory requests and limits (shared-cluster noisy-neighbour control)."
+        message: "CPU and memory requests and limits are required."
+
         pattern:
           spec:
             containers:
               - resources:
                   requests:
-                    memory: "?*"
                     cpu: "?*"
+                    memory: "?*"
                   limits:
-                    memory: "?*"
                     cpu: "?*"
+                    memory: "?*"
+

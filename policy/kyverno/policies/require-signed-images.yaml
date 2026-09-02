@@ -1,39 +1,41 @@
-# This is the actual enforcement point for "only images we built and scanned run in
-# the cluster." The CI pipeline signing an image is worthless as a control unless
-# something refuses to run an unsigned one - that something is here, not in CI.
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy
+
 metadata:
   name: require-signed-images
+
   annotations:
     policies.kyverno.io/title: Require Cosign-Signed Images
     policies.kyverno.io/severity: high
     policies.kyverno.io/description: >-
-      Blocks any pod in the accounts-api namespace from running unless its
-      image carries a valid cosign keyless signature from our GitHub Actions
-      OIDC identity. Scoped by explicit namespace name rather than cluster-wide
-      or label selector, since the cluster is shared with ~12 other teams we
-      don't own the release process for, and explicit naming is what our
-      offline `kyverno test` suite can actually verify without a live cluster
-      resolving namespace labels (see DECISIONS.md).
+      Require Cosign keyless signatures for accounts-api images before
+      allowing them to run in the accounts-api namespace.
+
 spec:
   validationFailureAction: Enforce
   background: false
   webhookTimeoutSeconds: 30
+
   rules:
     - name: verify-cosign-signature
+
       match:
         any:
           - resources:
-              kinds: [Pod]
-              namespaces: [accounts-api]
+              kinds:
+                - Pod
+              namespaces:
+                - accounts-api
+
       verifyImages:
         - imageReferences:
-            - "ghcr.io/org/accounts-api*"
+            - ghcr.io/org/accounts-api*
+
           attestors:
             - entries:
                 - keyless:
-                    subject: "https://github.com/org/accounts-api/.github/workflows/ci.yaml@refs/heads/main"
-                    issuer: "https://token.actions.githubusercontent.com"
-          mutateDigest: true      # rewrites tag -> digest so what runs is exactly what was verified
+                    issuer: https://token.actions.githubusercontent.com
+                    subject: https://github.com/org/accounts-api/.github/workflows/ci.yaml@refs/heads/main
+
+          mutateDigest: true
           required: true

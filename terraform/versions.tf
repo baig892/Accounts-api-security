@@ -1,5 +1,6 @@
 terraform {
-  required_version = ">= 1.5"
+  required_version = ">= 1.5.0"
+
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -7,15 +8,13 @@ terraform {
     }
   }
 
-  # Assumption: remote state in a dedicated, versioned, encrypted S3 bucket with a
-  # DynamoDB lock table, in the security/platform account of the AWS Organization,
-  # not the workload account. Backend block left unconfigured here (values are
-  # account-specific and shouldn't be hardcoded in a submission repo) - see
-  # DECISIONS.md "State backend".
+  # Backend configuration is provided separately per environment.
+  # See DECISIONS.md for the remote state design.
 }
 
 provider "aws" {
   region = "ap-south-1"
+
   default_tags {
     tags = {
       service    = "accounts-api"
