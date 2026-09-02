@@ -59,7 +59,7 @@ jobs:
       # one less tool for 2 people to maintain, giving up a second vuln db
       # as a cross-check
       - name: Trivy SCA (source deps)
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@v0.24.0
         with:
           scan-type: fs
           scan-ref: app
@@ -119,7 +119,7 @@ jobs:
           tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
  
       - name: Trivy vulnerability scan (image)
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@v0.24.0
         with:
           image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
           severity: CRITICAL,HIGH
