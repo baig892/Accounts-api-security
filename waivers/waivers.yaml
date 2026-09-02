@@ -1,0 +1,10 @@
+# Security vulnerability waivers
+# Each waiver must have: id, expiry (ISO 8601 format), and reason
+# Expired waivers are automatically rejected by the CI pipeline
+# Format: 
+#   waivers:
+#     - id: CVE-2024-XXXXX
+#       expiry: 2025-12-31T23:59:59Z
+#       reason: "Brief explanation of why this vulnerability is accepted"
+
+waivers: []
