@@ -1,0 +1,7 @@
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+sbom.cdx.json
+trivy-results.sarif
+.secrets.baseline

@@ -1,0 +1,83 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: accounts-api
+  labels:
+    data-classification: pci-adjacent
+---
+# COMPLIANT pod: should pass restrict-pod-security in full.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: accounts-api-good
+  namespace: accounts-api
+spec:
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: accounts-api
+      image: ghcr.io/org/accounts-api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      securityContext:
+        allowPrivilegeEscalation: false
+        privileged: false
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests: { cpu: 100m, memory: 128Mi }
+        limits: { cpu: 500m, memory: 256Mi }
+---
+# NON-COMPLIANT pod: privileged, no dropped caps, no limits, root-capable.
+# Should be BLOCKED by restrict-pod-security (multiple rules).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: accounts-api-bad-privileged
+  namespace: accounts-api
+spec:
+  containers:
+    - name: accounts-api
+      image: ghcr.io/org/accounts-api@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      securityContext:
+        privileged: true
+        allowPrivilegeEscalation: true
+---
+# NON-COMPLIANT pod: fine on pod-security, but missing resource limits only.
+# Should be blocked by require-resource-limits specifically - proves the rules
+# are independently enforced, not just an all-or-nothing pattern match.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: accounts-api-bad-no-limits
+  namespace: accounts-api
+spec:
+  securityContext:
+    runAsNonRoot: true
+  containers:
+    - name: accounts-api
+      image: ghcr.io/org/accounts-api@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      securityContext:
+        allowPrivilegeEscalation: false
+        privileged: false
+        capabilities:
+          drop: ["ALL"]
+---
+# Pod in an UNLABELLED namespace - policy must NOT apply here. Proves the
+# namespaceSelector scoping actually works and other teams aren't affected.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: other-team-ns
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: other-team-privileged-pod
+  namespace: other-team-ns
+spec:
+  containers:
+    - name: whatever
+      image: nginx:latest
+      securityContext:
+        privileged: true

@@ -1,0 +1,147 @@
+name: accounts-api-secure-build
+
+# Assumption: repo uses trunk-based dev, protected `main`, PRs required (see DECISIONS.md
+# "Branch/merge controls" - this is how we compensate for 40 people holding merge rights
+# with no dedicated security team).
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write      # required for keyless cosign (OIDC) and GitHub->AWS OIDC federation
+  packages: write       # push to ghcr.io
+  security-events: write # upload SARIF to code scanning
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}/accounts-api
+  # Registry substitute for ECR: brief allows a free registry; mapping to ECR is documented
+  # in DECISIONS.md ("Registry mapping"). Swap this env + the login step for ECR in prod.
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Gate 1: secrets. Runs first and cheap - no point building an image that
+  # embeds a leaked credential.
+  # ---------------------------------------------------------------------
+  secrets-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # gitleaks needs history to catch secrets in prior commits
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Fails the job (default) on any finding. No allowlist checked in by default -
+        # a real allowlist entry requires a platform-team-approved PR to .gitleaks.toml.
+
+  # ---------------------------------------------------------------------
+  # Gate 2: static analysis on the app code and IaC, in parallel with build.
+  # ---------------------------------------------------------------------
+  static-analysis:
+    runs-on: ubuntu-latest
+    needs: secrets-scan
+    steps:
+      - uses: actions/checkout@v4
+      - name: Semgrep (SAST)
+        uses: semgrep/semgrep-action@v1
+        with:
+          config: p/golang p/owasp-top-ten p/secrets
+        continue-on-error: false
+      - name: Checkov (IaC)
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: terraform
+          framework: terraform
+          soft_fail: false
+      - name: Kyverno policy tests
+        run: |
+          curl -sL https://github.com/kyverno/kyverno/releases/latest/download/kyverno-cli_linux_x86_64.tar.gz | tar xz
+          ./kyverno test policy/kyverno/tests
+
+  # ---------------------------------------------------------------------
+  # Build the image once, scan it, sign it. Everything downstream consumes
+  # THIS digest - no rebuild-and-hope between scan and deploy.
+  # ---------------------------------------------------------------------
+  build-scan-sign:
+    runs-on: ubuntu-latest
+    needs: [secrets-scan, static-analysis]
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build image (no push yet)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: app
+          push: false
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          severity: CRITICAL,HIGH
+          exit-code: '1'          # hard gate - build stops here on Critical/High
+          ignore-unfixed: true    # don't block on CVEs with no available fix (documented risk-accept, see DECISIONS.md)
+          format: sarif
+          output: trivy-results.sarif
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+
+      - name: Generate SBOM (Syft, CycloneDX)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+
+      - name: Push image (only after scan passes)
+        if: github.event_name == 'push'
+        run: |
+          docker push ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Install cosign
+        if: github.event_name == 'push'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image (keyless, OIDC) + attach SBOM
+        if: github.event_name == 'push'
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ${{ env.IMAGE_NAME }}:${{ github.sha }})
+          cosign sign --yes "$DIGEST"
+          cosign attach sbom --sbom sbom.cdx.json "$DIGEST"
+          cosign attest --yes --predicate sbom.cdx.json --type cyclonedx "$DIGEST"
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.cdx.json
+
+  # ---------------------------------------------------------------------
+  # Deploy gate: kubectl apply is intentionally NOT here. Kyverno's
+  # `verifyImages` policy in-cluster is the actual enforcement point for
+  # "only signed images run" - this job only proves the artifact chain
+  # up to push. See DECISIONS.md "Why enforcement lives in the cluster,
+  # not the pipeline".
+  # ---------------------------------------------------------------------

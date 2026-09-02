@@ -1,0 +1,11 @@
+title = "accounts-api gitleaks config"
+
+# Extend the default Gitleaks ruleset rather than replace it - we want AWS keys,
+# generic API keys, JWTs, private keys, etc. all covered out of the box.
+[extend]
+useDefault = true
+
+# No allowlist entries. Any addition here requires a platform-team-approved PR;
+# this file being empty is itself a signal that nothing has been risk-accepted yet.
+[allowlist]
+description = "No blanket allowlist. Path- or fingerprint-specific exceptions only, added deliberately."
